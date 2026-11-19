@@ -4,6 +4,7 @@
 
 # Maven
 **/target/
+**/build/
 
 # Java
 *.class
@@ -13,10 +14,6 @@
 .env
 .env.*
 !.env.example
-*.pem
-*.key
-*.p12
-*.jks
 
 # OS
 .DS_Store
