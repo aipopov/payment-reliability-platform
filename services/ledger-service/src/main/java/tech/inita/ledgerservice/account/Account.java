@@ -17,8 +17,9 @@ import java.util.UUID;
 @NoArgsConstructor(access = AccessLevel.PROTECTED)
 public class Account {
     @Id
+    @GeneratedValue(strategy = GenerationType.UUID)
     @Column(name = "id", nullable = false, updatable = false)
-    private UUID id = UUID.randomUUID();
+    private UUID id;
 
     @Enumerated(EnumType.STRING)
     @Column(name = "owner_type", nullable = false, length = 20)
