@@ -4,6 +4,9 @@ import jakarta.persistence.*;
 import lombok.AccessLevel;
 import lombok.Getter;
 import lombok.NoArgsConstructor;
+import tech.inita.ledgerservice.account.exception.AccountNotOpenException;
+import tech.inita.ledgerservice.account.exception.InsufficientAccountBalanceException;
+import tech.inita.ledgerservice.posting.PostingSide;
 
 import java.math.BigDecimal;
 import java.time.Instant;
@@ -77,5 +80,43 @@ public class Account {
     private void preUpdate() {
         updatedAt = Instant.now();
     }
+
+
+    public void applyPosting(PostingSide side, BigDecimal amount) {
+        if (status != AccountStatus.OPEN) {
+            throw new AccountNotOpenException(id);
+        }
+
+        if (side == null) {
+            throw new IllegalArgumentException("Posting side must not be null");
+        }
+
+        if (amount == null || amount.signum() <= 0) {
+            throw new IllegalArgumentException(
+                    "Posting amount must be greater than zero"
+            );
+        }
+
+
+        boolean increasesBalance = isIncreasesBalance(side);
+
+        BigDecimal newBalance = increasesBalance
+                ? balance.add(amount)
+                : balance.subtract(amount);
+
+        if (!allowNegative && newBalance.signum() < 0) {
+            throw new InsufficientAccountBalanceException(id);
+        }
+
+        this.balance = newBalance;
+    }
+
+    private boolean isIncreasesBalance(PostingSide side) {
+        NormalSide normalSide = accountType.getAccountClass().getNormalSide();
+
+        return (side == PostingSide.DEBIT && normalSide == NormalSide.DEBIT)
+                || (side == PostingSide.CREDIT && normalSide == NormalSide.CREDIT);
+    }
+
 
 }
