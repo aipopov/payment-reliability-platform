@@ -10,7 +10,7 @@ import java.util.UUID;
 @RequiredArgsConstructor
 public class AccountService {
 
-    private final AccountRepository accountRepository;
+    private final AccountPersistenceAdapter accountPersistenceAdapter;
 
     @Transactional
     public Account createAccount(OwnerType ownerType, UUID ownerId, AccountType accountType, String currency, boolean allowNegative) {
@@ -22,6 +22,6 @@ public class AccountService {
                 allowNegative
         );
 
-        return accountRepository.save(account);
+        return accountPersistenceAdapter.save(account);
     }
 }
