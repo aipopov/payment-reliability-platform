@@ -1,4 +1,4 @@
-package tech.inita.ledgerservice.account;
+package tech.inita.ledgerservice.account.exception;
 
 public class AccountAlreadyExistException extends RuntimeException{
     public AccountAlreadyExistException(Exception e) {

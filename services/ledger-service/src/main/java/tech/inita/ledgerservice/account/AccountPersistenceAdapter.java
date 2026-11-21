@@ -4,6 +4,7 @@ import lombok.RequiredArgsConstructor;
 import org.hibernate.exception.ConstraintViolationException;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Repository;
+import tech.inita.ledgerservice.account.exception.AccountAlreadyExistException;
 
 @Repository
 @RequiredArgsConstructor
