@@ -67,44 +67,31 @@ class AccountControllerIntegrationTest {
 
         try (ExecutorService executor = Executors.newFixedThreadPool(2)) {
 
-            Future<Integer> firstRequest = executor.submit(
-                    () -> sendRequest(ready, start)
-            );
+            Future<Integer> firstRequest = executor.submit(() -> sendRequest(ready, start));
+            Future<Integer> secondRequest = executor.submit(() -> sendRequest(ready, start));
 
-            Future<Integer> secondRequest = executor.submit(
-                    () -> sendRequest(ready, start)
-            );
-
-            assertThat(ready.await(5, TimeUnit.SECONDS)).isTrue();
-
-            start.countDown();
+            try {
+                assertThat(ready.await(5, TimeUnit.SECONDS)).isTrue();
+            } finally {
+                start.countDown();
+            }
 
             int firstStatus = firstRequest.get(15, TimeUnit.SECONDS);
             int secondStatus = secondRequest.get(15, TimeUnit.SECONDS);
 
-            assertThat(List.of(firstStatus, secondStatus))
-                    .containsExactlyInAnyOrder(201, 409);
+            assertThat(List.of(firstStatus, secondStatus)).containsExactlyInAnyOrder(201, 409);
 
             assertThat(accountRepository.count()).isEqualTo(1);
         }
     }
 
-    private int sendRequest(
-            CountDownLatch ready,
-            CountDownLatch start
-    ) throws Exception {
-
+    private int sendRequest(CountDownLatch ready, CountDownLatch start) throws Exception {
         ready.countDown();
 
-        if (!start.await(5, TimeUnit.SECONDS)) {
-            throw new IllegalStateException("Concurrent request start timed out");
-        }
+        if (!start.await(5, TimeUnit.SECONDS)) throw new IllegalStateException("Concurrent request start timed out");
 
-        return mockMvc.perform(
-                        post("/api/v1/accounts")
-                                .contentType(MediaType.APPLICATION_JSON)
-                                .content(REQUEST_BODY)
-                )
+        return mockMvc
+                .perform(post("/api/v1/accounts").contentType(MediaType.APPLICATION_JSON).content(REQUEST_BODY))
                 .andReturn()
                 .getResponse()
                 .getStatus();

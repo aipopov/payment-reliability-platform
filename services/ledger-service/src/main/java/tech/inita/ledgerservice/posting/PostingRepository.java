@@ -7,4 +7,5 @@ import java.util.UUID;
 
 public interface PostingRepository extends JpaRepository<Posting, UUID> {
     List<Posting> findAllByJournalEntryId(UUID journalEntryId);
+    List<Posting> findAllByJournalEntry_ReferenceId(UUID referenceId);
 }

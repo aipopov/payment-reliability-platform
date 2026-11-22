@@ -27,13 +27,11 @@ class AccountServiceTest {
 
     @Test
     void shouldCreateAccount() {
-        // Arrange
         UUID ownerId = UUID.randomUUID();
 
         when(accountRepository.save(any(Account.class)))
                 .thenAnswer(invocation -> invocation.getArgument(0));
 
-        // Act
         Account result = accountService.createAccount(
                 OwnerType.CUSTOMER,
                 ownerId,
@@ -42,9 +40,7 @@ class AccountServiceTest {
                 false
         );
 
-        // Assert
-        ArgumentCaptor<Account> captor =
-                ArgumentCaptor.forClass(Account.class);
+        ArgumentCaptor<Account> captor = ArgumentCaptor.forClass(Account.class);
 
         verify(accountRepository).save(captor.capture());
 
