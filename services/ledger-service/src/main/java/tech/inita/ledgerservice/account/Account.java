@@ -4,6 +4,7 @@ import jakarta.persistence.*;
 import lombok.AccessLevel;
 import lombok.Getter;
 import lombok.NoArgsConstructor;
+import tech.inita.ledgerservice.account.exception.AccountHasNonZeroBalanceException;
 import tech.inita.ledgerservice.account.exception.AccountNotOpenException;
 import tech.inita.ledgerservice.account.exception.InsufficientAccountBalanceException;
 import tech.inita.ledgerservice.posting.PostingSide;
@@ -116,6 +117,13 @@ public class Account {
 
         return (side == PostingSide.DEBIT && normalSide == NormalSide.DEBIT)
                 || (side == PostingSide.CREDIT && normalSide == NormalSide.CREDIT);
+    }
+
+    public void close() {
+        if (status != AccountStatus.OPEN) throw new AccountNotOpenException(id);
+        if (balance.compareTo(BigDecimal.ZERO) != 0) throw new AccountHasNonZeroBalanceException(id, balance);
+
+        this.status = AccountStatus.CLOSED;
     }
 
 

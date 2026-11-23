@@ -9,6 +9,7 @@ import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 import org.testcontainers.postgresql.PostgreSQLContainer;
 import tech.inita.ledgerservice.account.*;
+import tech.inita.ledgerservice.account.exception.AccountNotOpenException;
 import tech.inita.ledgerservice.account.exception.InsufficientAccountBalanceException;
 import tech.inita.ledgerservice.journalentry.JournalEntry;
 import tech.inita.ledgerservice.journalentry.JournalEntryRepository;
@@ -29,6 +30,7 @@ import java.util.concurrent.*;
 import java.util.stream.Stream;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 
 @SpringBootTest
@@ -372,4 +374,41 @@ public class LedgerServiceIntegrationTest {
             return null;
         }
     }
+
+    @Test
+    void checkPostingToClosedAccount() {
+        TestAccounts accounts = createTestAccounts();
+
+        accountService.closeAccount(accounts.available().getId());
+
+        PostJournalEntryCommand command = new PostJournalEntryCommand(
+                JournalEntryType.PAYMENT_RESERVE,
+                CURRENCY,
+                "PAYMENT",
+                accounts.referenceId(),
+                "Reserve payment",
+                List.of(
+                        new PostingLineCommand(accounts.available().getId(), PostingSide.DEBIT, new BigDecimal("1000")),
+                        new PostingLineCommand(accounts.reserved().getId(), PostingSide.CREDIT, new BigDecimal("1000"))
+                )
+        );
+
+        assertThatThrownBy(() -> ledgerService.postJournalEntry(command)).isInstanceOf(AccountNotOpenException.class);
+
+        assertThat(journalEntryRepository
+                .findByReferenceTypeAndReferenceId("PAYMENT", accounts.referenceId()))
+                .isEmpty();
+
+        assertThat(postingRepository
+                .findAllByJournalEntry_ReferenceId(accounts.referenceId()))
+                .isEmpty();
+
+        assertAccountBalance(accounts.available().getId(), BigDecimal.ZERO);
+        assertAccountBalance(accounts.reserved().getId(), BigDecimal.ZERO);
+
+        Account closedAccount = accountRepository.findById(accounts.available().getId()).orElseThrow();
+
+        assertThat(closedAccount.getStatus()).isEqualTo(AccountStatus.CLOSED);
+    }
+
 }
