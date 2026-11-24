@@ -6,6 +6,7 @@ import org.springframework.transaction.annotation.Transactional;
 import tech.inita.ledgerservice.account.Account;
 import tech.inita.ledgerservice.account.AccountLockManager;
 import tech.inita.ledgerservice.idempotency.IdempotencyResult;
+import tech.inita.ledgerservice.idempotency.IdempotencyScopes;
 import tech.inita.ledgerservice.idempotency.IdempotencyService;
 import tech.inita.ledgerservice.idempotency.RequestHashService;
 import tech.inita.ledgerservice.journalentry.JournalEntry;
@@ -34,8 +35,6 @@ public class LedgerService {
     private final RequestHashService requestHashService;
     private final IdempotencyService idempotencyService;
     private final ObjectMapper objectMapper;
-
-    private static final String IDEMPOTENCY_SCOPE = "ledger:post-journal-entry";
 
     private void validateAccountCurrencies(PostJournalEntryCommand command, List<Account> accounts) {
         for (Account account : accounts) {
@@ -108,7 +107,7 @@ public class LedgerService {
 
     private IdempotencyResult acquireIdempotency(PostJournalEntryCommand command, String idempotencyKey) {
         String requestHash = requestHashService.hash(command);
-        return idempotencyService.acquire(IDEMPOTENCY_SCOPE, idempotencyKey, requestHash);
+        return idempotencyService.acquire(IdempotencyScopes.LEDGER_POST_JOURNAL_ENTRY, idempotencyKey, requestHash);
     }
 
     private void completeIdempotency(

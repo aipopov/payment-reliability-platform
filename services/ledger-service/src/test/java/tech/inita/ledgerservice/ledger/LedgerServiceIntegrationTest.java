@@ -8,6 +8,9 @@ import tech.inita.ledgerservice.AbstractIntegrationTest;
 import tech.inita.ledgerservice.account.*;
 import tech.inita.ledgerservice.account.exception.AccountNotOpenException;
 import tech.inita.ledgerservice.account.exception.InsufficientAccountBalanceException;
+import tech.inita.ledgerservice.idempotency.IdempotencyRecordRepository;
+import tech.inita.ledgerservice.idempotency.IdempotencyScopes;
+import tech.inita.ledgerservice.idempotency.exception.IdempotencyKeyReuseException;
 import tech.inita.ledgerservice.journalentry.JournalEntry;
 import tech.inita.ledgerservice.journalentry.JournalEntryRepository;
 import tech.inita.ledgerservice.journalentry.JournalEntryStatus;
@@ -18,6 +21,7 @@ import tech.inita.ledgerservice.ledger.command.PostingLineCommand;
 import tech.inita.ledgerservice.posting.Posting;
 import tech.inita.ledgerservice.posting.PostingRepository;
 import tech.inita.ledgerservice.posting.PostingSide;
+import static org.assertj.core.api.InstanceOfAssertFactories.BIG_DECIMAL;
 
 import java.math.BigDecimal;
 import java.util.List;
@@ -26,8 +30,7 @@ import java.util.UUID;
 import java.util.concurrent.*;
 import java.util.stream.Stream;
 
-import static org.assertj.core.api.Assertions.assertThat;
-import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.assertj.core.api.Assertions.*;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 
 @SpringBootTest
@@ -52,6 +55,8 @@ public class LedgerServiceIntegrationTest extends AbstractIntegrationTest{
 
     private static final BigDecimal INITIAL_AMOUNT = BigDecimal.valueOf(1000);
     private static final BigDecimal RESERVE_AMOUNT = BigDecimal.valueOf(500);
+    @Autowired
+    private IdempotencyRecordRepository idempotencyRecordRepository;
 
     private Account createAccount(OwnerType ownerType, UUID ownerId, AccountType accountType) {
         return accountService.createAccount(
@@ -215,9 +220,10 @@ public class LedgerServiceIntegrationTest extends AbstractIntegrationTest{
 
     @Test
     void checkInsufficientAccountBalance() {
-
         TestAccounts accounts = createTestAccounts();
         String referenceType = "PAYMENT";
+
+        String idempotencyKey = UUID.randomUUID().toString();
 
         assertThrows(InsufficientAccountBalanceException.class, () -> ledgerService.postJournalEntry(new PostJournalEntryCommand(
                 JournalEntryType.PAYMENT_RESERVE,
@@ -231,7 +237,9 @@ public class LedgerServiceIntegrationTest extends AbstractIntegrationTest{
                         new PostingLineCommand(accounts.reserved().getId(), PostingSide.CREDIT, BigDecimal.valueOf(2000))
                 )
 
-        ), UUID.randomUUID().toString()));
+        ), idempotencyKey));
+
+        assertThat(idempotencyRecordRepository.findByScopeAndIdempotencyKey(IdempotencyScopes.LEDGER_POST_JOURNAL_ENTRY, idempotencyKey)).isEmpty();
 
         assertThat(journalEntryRepository.findByReferenceTypeAndReferenceId(referenceType, accounts.referenceId())).isEmpty();
         assertThat(postingRepository.findAllByJournalEntry_ReferenceId(accounts.referenceId())).isEmpty();
@@ -241,8 +249,8 @@ public class LedgerServiceIntegrationTest extends AbstractIntegrationTest{
         assertAccountBalance(accounts.reserved().getId(), BigDecimal.ZERO);
     }
 
-    @Test
-    void checkConcurrentReserve() throws Exception {
+
+    void concurrentReserve(boolean useSameIdempotencyKey) throws Exception {
 
         TestAccounts accounts = createTestAccounts();
         BigDecimal initialAmount = BigDecimal.valueOf(1000);
@@ -268,6 +276,8 @@ public class LedgerServiceIntegrationTest extends AbstractIntegrationTest{
         UUID firstReferenceId = UUID.randomUUID();
         UUID secondReferenceId = UUID.randomUUID();
 
+        String idempotencyKey = UUID.randomUUID().toString();
+
         try (ExecutorService executor = Executors.newFixedThreadPool(2)) {
 
             Future<UUID> firstRequest = executor.submit(() ->
@@ -277,7 +287,8 @@ public class LedgerServiceIntegrationTest extends AbstractIntegrationTest{
                             accounts.available().getId(),
                             accounts.reserved().getId(),
                             reserveAmount,
-                            firstReferenceId
+                            firstReferenceId,
+                            useSameIdempotencyKey?idempotencyKey:UUID.randomUUID().toString()
                     )
             );
             Future<UUID> secondRequest = executor.submit(() ->
@@ -287,7 +298,8 @@ public class LedgerServiceIntegrationTest extends AbstractIntegrationTest{
                             accounts.available().getId(),
                             accounts.reserved().getId(),
                             reserveAmount,
-                            secondReferenceId
+                            secondReferenceId,
+                            useSameIdempotencyKey?idempotencyKey:UUID.randomUUID().toString()
                     )
             );
 
@@ -296,8 +308,6 @@ public class LedgerServiceIntegrationTest extends AbstractIntegrationTest{
             } finally {
                 start.countDown();
             }
-
-            start.countDown();
 
             UUID firstResult = firstRequest.get(15, TimeUnit.SECONDS);
             UUID secondResult = secondRequest.get(15, TimeUnit.SECONDS);
@@ -332,7 +342,8 @@ public class LedgerServiceIntegrationTest extends AbstractIntegrationTest{
             UUID availableAccountId,
             UUID reservedAccountId,
             BigDecimal reserveAmount,
-            UUID referenceId
+            UUID referenceId,
+            String idempotencyKey
     ) throws Exception {
 
         ready.countDown();
@@ -351,10 +362,15 @@ public class LedgerServiceIntegrationTest extends AbstractIntegrationTest{
                             new PostingLineCommand(reservedAccountId, PostingSide.CREDIT, reserveAmount)
                     )
 
-            ), UUID.randomUUID().toString());
+            ), idempotencyKey);
         } catch (InsufficientAccountBalanceException exception) {
             return null;
         }
+    }
+
+    @Test
+    void checkConcurrentReserveWithDifferentIdempotencyKey() throws Exception {
+        concurrentReserve(false);
     }
 
     @Test
@@ -391,6 +407,215 @@ public class LedgerServiceIntegrationTest extends AbstractIntegrationTest{
         Account closedAccount = accountRepository.findById(accounts.available().getId()).orElseThrow();
 
         assertThat(closedAccount.getStatus()).isEqualTo(AccountStatus.CLOSED);
+    }
+
+    @Test
+    void shouldExecuteOperationOnlyOnceForSameIdempotencyKey() {
+
+        TestAccounts accounts = createTestAccounts();
+        String idempotencyKey = UUID.randomUUID().toString();
+
+        BigDecimal initialAmount = new BigDecimal("1000");
+        String referenceType = "DEPOSIT";
+
+        PostJournalEntryCommand command = new PostJournalEntryCommand(
+                JournalEntryType.ADJUSTMENT,
+                CURRENCY,
+                referenceType,
+                accounts.referenceId(),
+                "Deposit of 1000 rub",
+                List.of(
+                        new PostingLineCommand(accounts.cash().getId(), PostingSide.DEBIT, initialAmount),
+                        new PostingLineCommand(accounts.available().getId(), PostingSide.CREDIT, initialAmount)
+                )
+        );
+
+        UUID firstJournalEntryId = ledgerService.postJournalEntry(command,  idempotencyKey);
+        UUID secondJournalEntryId = ledgerService.postJournalEntry(command,  idempotencyKey);
+
+        assertExecuteOperationOnlyOnce(
+                firstJournalEntryId,
+                secondJournalEntryId,
+                referenceType,
+                accounts.referenceId(),
+                accounts.cash().getId(),
+                accounts.available().getId(),
+                initialAmount,
+                initialAmount
+        );
+    }
+
+    void assertExecuteOperationOnlyOnce(
+            UUID firstJournalEntryId,
+            UUID secondJournalEntryId,
+            String referenceType,
+            UUID referenceId,
+            UUID firstAccountId,
+            UUID secondAccountId,
+            BigDecimal expectFirstAccountBalance,
+            BigDecimal expectSecondAccountBalance
+    ) {
+        assertThat(firstJournalEntryId).isEqualByComparingTo(secondJournalEntryId);
+
+        assertThat(journalEntryRepository
+                .findByReferenceTypeAndReferenceId(referenceType, referenceId))
+                .isPresent()
+                .get()
+                .extracting(JournalEntry::getId)
+                .isEqualTo(firstJournalEntryId);
+
+        assertThat(postingRepository.findAllByJournalEntryId(firstJournalEntryId))
+                .hasSize(2);
+
+        assertThat(accountRepository.findById(firstAccountId))
+                .get()
+                .extracting(Account::getBalance, BIG_DECIMAL)
+                .isEqualByComparingTo(expectFirstAccountBalance);
+        assertThat(accountRepository.findById(secondAccountId))
+                .get()
+                .extracting(Account::getBalance, BIG_DECIMAL)
+                .isEqualByComparingTo(expectSecondAccountBalance);
+    }
+
+    @Test
+    void shouldRejectSameIdempotencyKeyWithDifferentRequest() {
+
+        TestAccounts accounts = createTestAccounts();
+        String idempotencyKey = UUID.randomUUID().toString();
+
+        BigDecimal initialCashBalance = accounts.cash().getBalance();
+        BigDecimal initialAvailableBalance = accounts.available().getBalance();
+
+        BigDecimal depositAmount1 = new BigDecimal("1000");
+        BigDecimal depositAmount2 = new BigDecimal("2000");
+        String referenceType = "DEPOSIT";
+
+        PostJournalEntryCommand command1 = new PostJournalEntryCommand(
+                JournalEntryType.ADJUSTMENT,
+                CURRENCY,
+                referenceType,
+                accounts.referenceId(),
+                "Deposit of 1000 rub",
+                List.of(
+                        new PostingLineCommand(accounts.cash().getId(), PostingSide.DEBIT, depositAmount1),
+                        new PostingLineCommand(accounts.available().getId(), PostingSide.CREDIT, depositAmount1)
+                )
+        );
+
+        PostJournalEntryCommand command2 = new PostJournalEntryCommand(
+                JournalEntryType.ADJUSTMENT,
+                CURRENCY,
+                referenceType,
+                accounts.referenceId(),
+                "Deposit of 2000 rub",
+                List.of(
+                        new PostingLineCommand(accounts.cash().getId(), PostingSide.DEBIT, depositAmount2),
+                        new PostingLineCommand(accounts.available().getId(), PostingSide.CREDIT, depositAmount2)
+                )
+        );
+
+        ledgerService.postJournalEntry(command1,  idempotencyKey);
+
+        assertThatThrownBy(() ->ledgerService.postJournalEntry(command2,  idempotencyKey))
+                .isInstanceOf(IdempotencyKeyReuseException.class);
+
+        BigDecimal actualCashBalance = accountRepository
+                .findById(accounts.cash().getId())
+                .orElseThrow()
+                .getBalance();
+
+        BigDecimal actualAvailableBalance = accountRepository
+                .findById(accounts.available().getId())
+                .orElseThrow()
+                .getBalance();
+
+        assertThat(actualCashBalance).isEqualByComparingTo(initialCashBalance.add(depositAmount1));
+        assertThat(actualAvailableBalance).isEqualByComparingTo(initialAvailableBalance.add(depositAmount1));
+    }
+
+    @Test
+    void shouldExecuteOnlyOnceForConcurrentRequests() throws Exception {
+
+        TestAccounts accounts = createTestAccounts();
+        BigDecimal initialAmount = BigDecimal.valueOf(1000);
+        BigDecimal reserveAmount = BigDecimal.valueOf(1000);
+
+        ledgerService.postJournalEntry(new PostJournalEntryCommand(
+                JournalEntryType.ADJUSTMENT,
+                CURRENCY,
+                "INITIAL_DEPOSIT",
+                UUID.randomUUID(),
+                "Initial deposit of 1000 RUB",
+                List.of(
+                        new PostingLineCommand(accounts.cash().getId(), PostingSide.DEBIT, initialAmount),
+                        new PostingLineCommand(accounts.available().getId(), PostingSide.CREDIT, initialAmount)
+                )
+
+        ), UUID.randomUUID().toString());
+
+        CountDownLatch ready = new CountDownLatch(2);
+        CountDownLatch start = new CountDownLatch(1);
+
+        String idempotencyKey = UUID.randomUUID().toString();
+        String referenceType = "PAYMENT";
+
+
+        PostJournalEntryCommand command = new PostJournalEntryCommand(
+                JournalEntryType.PAYMENT_RESERVE,
+                CURRENCY,
+                referenceType,
+                accounts.referenceId(),
+                "Reserve 1000 RUB",
+                List.of(
+                        new PostingLineCommand(accounts.available().getId(), PostingSide.DEBIT, reserveAmount),
+                        new PostingLineCommand(accounts.reserved().getId(), PostingSide.CREDIT, reserveAmount)
+                )
+
+        );
+
+        try (ExecutorService executor = Executors.newFixedThreadPool(2)) {
+
+            Future<UUID> firstRequest = executor.submit(() -> reserve2(ready, start, command, idempotencyKey));
+            Future<UUID> secondRequest = executor.submit(() -> reserve2(ready, start, command, idempotencyKey));
+
+            try {
+                assertThat(ready.await(5, TimeUnit.SECONDS)).isTrue();
+            } finally {
+                start.countDown();
+            }
+
+            UUID firstResult = firstRequest.get(15, TimeUnit.SECONDS);
+            UUID secondResult = secondRequest.get(15, TimeUnit.SECONDS);
+
+            assertExecuteOperationOnlyOnce(
+                    firstResult,
+                    secondResult,
+                    referenceType,
+                    accounts.referenceId(),
+                    accounts.available().getId(),
+                    accounts.reserved().getId(),
+                    BigDecimal.ZERO,
+                    reserveAmount
+            );
+        }
+    }
+
+    private UUID reserve2(
+            CountDownLatch ready,
+            CountDownLatch start,
+            PostJournalEntryCommand command,
+            String idempotencyKey
+    ) throws Exception {
+
+        ready.countDown();
+
+        if (!start.await(5, TimeUnit.SECONDS)) throw new IllegalStateException("Concurrent request start timed out");
+
+        try {
+            return ledgerService.postJournalEntry(command, idempotencyKey);
+        } catch (InsufficientAccountBalanceException | IdempotencyKeyReuseException exception) {
+            return null;
+        }
     }
 
 }
