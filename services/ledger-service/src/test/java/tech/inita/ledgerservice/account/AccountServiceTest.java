@@ -12,15 +12,13 @@ import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.Mockito.verify;
-import static org.mockito.Mockito.verifyNoMoreInteractions;
-import static org.mockito.Mockito.when;
+import static org.mockito.Mockito.*;
 
 @ExtendWith(MockitoExtension.class)
 class AccountServiceTest {
 
     @Mock
-    private AccountRepository accountRepository;
+    private AccountPersistenceAdapter accountPersistenceAdapter;
 
     @InjectMocks
     private AccountService accountService;
@@ -29,7 +27,7 @@ class AccountServiceTest {
     void shouldCreateAccount() {
         UUID ownerId = UUID.randomUUID();
 
-        when(accountRepository.save(any(Account.class)))
+        when(accountPersistenceAdapter.save(any(Account.class)))
                 .thenAnswer(invocation -> invocation.getArgument(0));
 
         Account result = accountService.createAccount(
@@ -42,7 +40,7 @@ class AccountServiceTest {
 
         ArgumentCaptor<Account> captor = ArgumentCaptor.forClass(Account.class);
 
-        verify(accountRepository).save(captor.capture());
+        verify(accountPersistenceAdapter).save(captor.capture());
 
         Account savedAccount = captor.getValue();
 
@@ -55,6 +53,6 @@ class AccountServiceTest {
         assertThat(savedAccount.isAllowNegative()).isFalse();
         assertThat(savedAccount.getStatus()).isEqualTo(AccountStatus.OPEN);
 
-        verifyNoMoreInteractions(accountRepository);
+        verifyNoMoreInteractions(accountPersistenceAdapter);
     }
 }

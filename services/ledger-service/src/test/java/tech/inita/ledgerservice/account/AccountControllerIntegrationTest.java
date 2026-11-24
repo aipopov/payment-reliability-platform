@@ -7,12 +7,10 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
 import org.springframework.http.MediaType;
-import org.springframework.test.context.DynamicPropertyRegistry;
-import org.springframework.test.context.DynamicPropertySource;
+import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.web.servlet.MockMvc;
-import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
-import org.testcontainers.postgresql.PostgreSQLContainer;
+import tech.inita.ledgerservice.AbstractIntegrationTest;
 
 import java.util.List;
 import java.util.concurrent.*;
@@ -23,24 +21,13 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
 @SpringBootTest
 @AutoConfigureMockMvc
 @Testcontainers
-class AccountControllerIntegrationTest {
-
-    @Container
-    static final PostgreSQLContainer postgres =
-            new PostgreSQLContainer("postgres:18-alpine")
-                    .withDatabaseName("ledger_test")
-                    .withUsername("ledger_user")
-                    .withPassword("ledger_password");
-
-    @DynamicPropertySource
-    static void configureDatabase(DynamicPropertyRegistry registry) {
-        registry.add("spring.datasource.url", postgres::getJdbcUrl);
-        registry.add("spring.datasource.username", postgres::getUsername);
-        registry.add("spring.datasource.password", postgres::getPassword);
-    }
-
+class AccountControllerIntegrationTest extends AbstractIntegrationTest {
     @Autowired
     private MockMvc mockMvc;
+
+    @Autowired
+    private JdbcTemplate jdbcTemplate;
+
 
     @Autowired
     private AccountRepository accountRepository;
@@ -57,7 +44,14 @@ class AccountControllerIntegrationTest {
 
     @BeforeEach
     void cleanDatabase() {
-        accountRepository.deleteAll();
+        jdbcTemplate.execute("""
+            TRUNCATE TABLE
+                postings,
+                journal_entries,
+                accounts,
+                idempotency_records
+            CASCADE
+            """);
     }
 
     @Test

@@ -3,11 +3,8 @@ package tech.inita.ledgerservice.ledger;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
-import org.springframework.test.context.DynamicPropertyRegistry;
-import org.springframework.test.context.DynamicPropertySource;
-import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
-import org.testcontainers.postgresql.PostgreSQLContainer;
+import tech.inita.ledgerservice.AbstractIntegrationTest;
 import tech.inita.ledgerservice.account.*;
 import tech.inita.ledgerservice.account.exception.AccountNotOpenException;
 import tech.inita.ledgerservice.account.exception.InsufficientAccountBalanceException;
@@ -35,22 +32,7 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 
 @SpringBootTest
 @Testcontainers
-public class LedgerServiceIntegrationTest {
-
-    @Container
-    static final PostgreSQLContainer postgres =
-            new PostgreSQLContainer("postgres:18-alpine")
-                    .withDatabaseName("ledger_test")
-                    .withUsername("ledger_user")
-                    .withPassword("ledger_password");
-
-    @DynamicPropertySource
-    static void configureDatabase(DynamicPropertyRegistry registry) {
-        registry.add("spring.datasource.url", postgres::getJdbcUrl);
-        registry.add("spring.datasource.username", postgres::getUsername);
-        registry.add("spring.datasource.password", postgres::getPassword);
-    }
-
+public class LedgerServiceIntegrationTest extends AbstractIntegrationTest{
     @Autowired
     LedgerService ledgerService;
 
@@ -147,7 +129,7 @@ public class LedgerServiceIntegrationTest {
                         new PostingLineCommand(accounts.available().getId(), PostingSide.CREDIT, INITIAL_AMOUNT)
                 )
 
-        ));
+        ), UUID.randomUUID().toString());
 
 
         assertAccountBalance(accounts.cash().getId(), INITIAL_AMOUNT);
@@ -166,7 +148,7 @@ public class LedgerServiceIntegrationTest {
                         new PostingLineCommand(accounts.reserved().getId(), PostingSide.CREDIT, RESERVE_AMOUNT)
                 )
 
-        ));
+        ), UUID.randomUUID().toString());
 
         assertAccountBalance(accounts.cash().getId(), INITIAL_AMOUNT);
         assertAccountBalance(accounts.available().getId(), INITIAL_AMOUNT.subtract(RESERVE_AMOUNT));
@@ -222,7 +204,7 @@ public class LedgerServiceIntegrationTest {
                         new PostingLineCommand(accounts.available().getId(), PostingSide.CREDIT, INITIAL_AMOUNT.subtract(new BigDecimal(100)))
                 )
 
-        )));
+        ), UUID.randomUUID().toString()));
 
         assertThat(journalEntryRepository.findByReferenceTypeAndReferenceId(referenceType, accounts.referenceId())).isEmpty();
         assertThat(postingRepository.findAllByJournalEntry_ReferenceId(accounts.referenceId())).isEmpty();
@@ -249,7 +231,7 @@ public class LedgerServiceIntegrationTest {
                         new PostingLineCommand(accounts.reserved().getId(), PostingSide.CREDIT, BigDecimal.valueOf(2000))
                 )
 
-        )));
+        ), UUID.randomUUID().toString()));
 
         assertThat(journalEntryRepository.findByReferenceTypeAndReferenceId(referenceType, accounts.referenceId())).isEmpty();
         assertThat(postingRepository.findAllByJournalEntry_ReferenceId(accounts.referenceId())).isEmpty();
@@ -277,7 +259,7 @@ public class LedgerServiceIntegrationTest {
                         new PostingLineCommand(accounts.available().getId(), PostingSide.CREDIT, initialAmount)
                 )
 
-        ));
+        ), UUID.randomUUID().toString());
 
         CountDownLatch ready = new CountDownLatch(2);
         CountDownLatch start = new CountDownLatch(1);
@@ -369,7 +351,7 @@ public class LedgerServiceIntegrationTest {
                             new PostingLineCommand(reservedAccountId, PostingSide.CREDIT, reserveAmount)
                     )
 
-            ));
+            ), UUID.randomUUID().toString());
         } catch (InsufficientAccountBalanceException exception) {
             return null;
         }
@@ -393,7 +375,7 @@ public class LedgerServiceIntegrationTest {
                 )
         );
 
-        assertThatThrownBy(() -> ledgerService.postJournalEntry(command)).isInstanceOf(AccountNotOpenException.class);
+        assertThatThrownBy(() -> ledgerService.postJournalEntry(command, UUID.randomUUID().toString())).isInstanceOf(AccountNotOpenException.class);
 
         assertThat(journalEntryRepository
                 .findByReferenceTypeAndReferenceId("PAYMENT", accounts.referenceId()))
