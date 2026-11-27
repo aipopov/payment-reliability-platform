@@ -1,23 +1,23 @@
-package tech.inita.ledgerservice.ledger;
+package tech.inita.ledgerservice.journalentry;
 
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.context.annotation.Import;
 import org.testcontainers.junit.jupiter.Testcontainers;
 import tech.inita.ledgerservice.AbstractIntegrationTest;
+import tech.inita.ledgerservice.TestAccountFactory;
+import tech.inita.ledgerservice.TestAccounts;
+import tech.inita.ledgerservice.TestConfig;
 import tech.inita.ledgerservice.account.*;
 import tech.inita.ledgerservice.account.exception.AccountNotOpenException;
 import tech.inita.ledgerservice.account.exception.InsufficientAccountBalanceException;
 import tech.inita.ledgerservice.idempotency.IdempotencyRecordRepository;
 import tech.inita.ledgerservice.idempotency.IdempotencyScopes;
 import tech.inita.ledgerservice.idempotency.exception.IdempotencyKeyReuseException;
-import tech.inita.ledgerservice.journalentry.JournalEntry;
-import tech.inita.ledgerservice.journalentry.JournalEntryRepository;
-import tech.inita.ledgerservice.journalentry.JournalEntryStatus;
-import tech.inita.ledgerservice.journalentry.JournalEntryType;
 import tech.inita.ledgerservice.journalentry.exception.UnbalancedJournalEntryException;
-import tech.inita.ledgerservice.ledger.command.PostJournalEntryCommand;
-import tech.inita.ledgerservice.ledger.command.PostingLineCommand;
+import tech.inita.ledgerservice.journalentry.command.PostJournalEntryCommand;
+import tech.inita.ledgerservice.journalentry.command.PostingLineCommand;
 import tech.inita.ledgerservice.posting.Posting;
 import tech.inita.ledgerservice.posting.PostingRepository;
 import tech.inita.ledgerservice.posting.PostingSide;
@@ -35,9 +35,10 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 
 @SpringBootTest
 @Testcontainers
-public class LedgerServiceIntegrationTest extends AbstractIntegrationTest{
+@Import(TestConfig.class)
+public class JournalEntryServiceIntegrationTest extends AbstractIntegrationTest{
     @Autowired
-    LedgerService ledgerService;
+    JournalEntryService journalEntryService;
 
     @Autowired
     AccountService accountService;
@@ -51,22 +52,15 @@ public class LedgerServiceIntegrationTest extends AbstractIntegrationTest{
     @Autowired
     private JournalEntryRepository journalEntryRepository;
 
+    @Autowired
+    private TestAccountFactory testAccountFactory;
+
     private static final String CURRENCY = "RUB";
 
     private static final BigDecimal INITIAL_AMOUNT = BigDecimal.valueOf(1000);
     private static final BigDecimal RESERVE_AMOUNT = BigDecimal.valueOf(500);
     @Autowired
     private IdempotencyRecordRepository idempotencyRecordRepository;
-
-    private Account createAccount(OwnerType ownerType, UUID ownerId, AccountType accountType) {
-        return accountService.createAccount(
-                ownerType,
-                ownerId,
-                accountType,
-                CURRENCY,
-                false
-        );
-    }
 
     private void assertAccountBalance(UUID accountId, BigDecimal expected) {
         Account account = accountRepository.findById(accountId)
@@ -89,41 +83,12 @@ public class LedgerServiceIntegrationTest extends AbstractIntegrationTest{
         assertThat(journalEntry.getPostedAt()).isNotNull();
     }
 
-    private record TestAccounts(
-            UUID customerId,
-            UUID platformId,
-            UUID referenceId,
-            Account cash,
-            Account available,
-            Account reserved
-    ) {
-    }
-
-    private TestAccounts createTestAccounts() {
-        UUID customerId = UUID.randomUUID();
-        UUID platformId = UUID.randomUUID();
-        UUID referenceId = UUID.randomUUID();
-
-        Account cashAccount = createAccount(OwnerType.PLATFORM, platformId, AccountType.CASH);
-        Account availableAccount = createAccount(OwnerType.CUSTOMER, customerId, AccountType.AVAILABLE);
-        Account reservedAccount = createAccount(OwnerType.CUSTOMER, customerId, AccountType.RESERVED);
-
-        return new TestAccounts(
-                customerId,
-                platformId,
-                referenceId,
-                cashAccount,
-                availableAccount,
-                reservedAccount
-        );
-    }
-
     @Test
     void postJournalEntrySuccessfulCheck() {
 
-        TestAccounts accounts = createTestAccounts();
+        TestAccounts accounts = testAccountFactory.createTestAccounts();
 
-        UUID depositEntryId = ledgerService.postJournalEntry(new PostJournalEntryCommand(
+        UUID depositEntryId = journalEntryService.postJournalEntry(new PostJournalEntryCommand(
                 JournalEntryType.ADJUSTMENT,
                 CURRENCY,
                 "INITIAL_DEPOSIT",
@@ -134,7 +99,7 @@ public class LedgerServiceIntegrationTest extends AbstractIntegrationTest{
                         new PostingLineCommand(accounts.available().getId(), PostingSide.CREDIT, INITIAL_AMOUNT)
                 )
 
-        ), UUID.randomUUID().toString());
+        ), UUID.randomUUID().toString()).getId();
 
 
         assertAccountBalance(accounts.cash().getId(), INITIAL_AMOUNT);
@@ -142,7 +107,7 @@ public class LedgerServiceIntegrationTest extends AbstractIntegrationTest{
         assertAccountBalance(accounts.reserved().getId(), BigDecimal.ZERO);
 
 
-        UUID reserveEntryId = ledgerService.postJournalEntry(new PostJournalEntryCommand(
+        UUID reserveEntryId = journalEntryService.postJournalEntry(new PostJournalEntryCommand(
                 JournalEntryType.PAYMENT_RESERVE,
                 CURRENCY,
                 "PAYMENT",
@@ -153,7 +118,7 @@ public class LedgerServiceIntegrationTest extends AbstractIntegrationTest{
                         new PostingLineCommand(accounts.reserved().getId(), PostingSide.CREDIT, RESERVE_AMOUNT)
                 )
 
-        ), UUID.randomUUID().toString());
+        ), UUID.randomUUID().toString()).getId();
 
         assertAccountBalance(accounts.cash().getId(), INITIAL_AMOUNT);
         assertAccountBalance(accounts.available().getId(), INITIAL_AMOUNT.subtract(RESERVE_AMOUNT));
@@ -195,10 +160,10 @@ public class LedgerServiceIntegrationTest extends AbstractIntegrationTest{
     @Test
     void checkUnbalancedJournalEntry() {
 
-        TestAccounts accounts = createTestAccounts();
+        TestAccounts accounts = testAccountFactory.createTestAccounts();
         String referenceType = "INITIAL_DEPOSIT";
 
-        assertThrows(UnbalancedJournalEntryException.class, () -> ledgerService.postJournalEntry(new PostJournalEntryCommand(
+        assertThrows(UnbalancedJournalEntryException.class, () -> journalEntryService.postJournalEntry(new PostJournalEntryCommand(
                 JournalEntryType.ADJUSTMENT,
                 CURRENCY,
                 referenceType,
@@ -220,12 +185,12 @@ public class LedgerServiceIntegrationTest extends AbstractIntegrationTest{
 
     @Test
     void checkInsufficientAccountBalance() {
-        TestAccounts accounts = createTestAccounts();
+        TestAccounts accounts = testAccountFactory.createTestAccounts();
         String referenceType = "PAYMENT";
 
         String idempotencyKey = UUID.randomUUID().toString();
 
-        assertThrows(InsufficientAccountBalanceException.class, () -> ledgerService.postJournalEntry(new PostJournalEntryCommand(
+        assertThrows(InsufficientAccountBalanceException.class, () -> journalEntryService.postJournalEntry(new PostJournalEntryCommand(
                 JournalEntryType.PAYMENT_RESERVE,
                 CURRENCY,
                 referenceType,
@@ -252,11 +217,11 @@ public class LedgerServiceIntegrationTest extends AbstractIntegrationTest{
 
     void concurrentReserve(boolean useSameIdempotencyKey) throws Exception {
 
-        TestAccounts accounts = createTestAccounts();
+        TestAccounts accounts = testAccountFactory.createTestAccounts();
         BigDecimal initialAmount = BigDecimal.valueOf(1000);
         BigDecimal reserveAmount = BigDecimal.valueOf(1000);
 
-        ledgerService.postJournalEntry(new PostJournalEntryCommand(
+        journalEntryService.postJournalEntry(new PostJournalEntryCommand(
                 JournalEntryType.ADJUSTMENT,
                 CURRENCY,
                 "INITIAL_DEPOSIT",
@@ -351,7 +316,7 @@ public class LedgerServiceIntegrationTest extends AbstractIntegrationTest{
         if (!start.await(5, TimeUnit.SECONDS)) throw new IllegalStateException("Concurrent request start timed out");
 
         try {
-            return ledgerService.postJournalEntry(new PostJournalEntryCommand(
+            return journalEntryService.postJournalEntry(new PostJournalEntryCommand(
                     JournalEntryType.PAYMENT_RESERVE,
                     CURRENCY,
                     "PAYMENT",
@@ -362,7 +327,7 @@ public class LedgerServiceIntegrationTest extends AbstractIntegrationTest{
                             new PostingLineCommand(reservedAccountId, PostingSide.CREDIT, reserveAmount)
                     )
 
-            ), idempotencyKey);
+            ), idempotencyKey).getId();
         } catch (InsufficientAccountBalanceException exception) {
             return null;
         }
@@ -375,7 +340,7 @@ public class LedgerServiceIntegrationTest extends AbstractIntegrationTest{
 
     @Test
     void checkPostingToClosedAccount() {
-        TestAccounts accounts = createTestAccounts();
+        TestAccounts accounts = testAccountFactory.createTestAccounts();
 
         accountService.closeAccount(accounts.available().getId());
 
@@ -391,7 +356,7 @@ public class LedgerServiceIntegrationTest extends AbstractIntegrationTest{
                 )
         );
 
-        assertThatThrownBy(() -> ledgerService.postJournalEntry(command, UUID.randomUUID().toString())).isInstanceOf(AccountNotOpenException.class);
+        assertThatThrownBy(() -> journalEntryService.postJournalEntry(command, UUID.randomUUID().toString())).isInstanceOf(AccountNotOpenException.class);
 
         assertThat(journalEntryRepository
                 .findByReferenceTypeAndReferenceId("PAYMENT", accounts.referenceId()))
@@ -412,7 +377,7 @@ public class LedgerServiceIntegrationTest extends AbstractIntegrationTest{
     @Test
     void shouldExecuteOperationOnlyOnceForSameIdempotencyKey() {
 
-        TestAccounts accounts = createTestAccounts();
+        TestAccounts accounts = testAccountFactory.createTestAccounts();
         String idempotencyKey = UUID.randomUUID().toString();
 
         BigDecimal initialAmount = new BigDecimal("1000");
@@ -430,8 +395,8 @@ public class LedgerServiceIntegrationTest extends AbstractIntegrationTest{
                 )
         );
 
-        UUID firstJournalEntryId = ledgerService.postJournalEntry(command,  idempotencyKey);
-        UUID secondJournalEntryId = ledgerService.postJournalEntry(command,  idempotencyKey);
+        UUID firstJournalEntryId = journalEntryService.postJournalEntry(command,  idempotencyKey).getId();
+        UUID secondJournalEntryId = journalEntryService.postJournalEntry(command,  idempotencyKey).getId();
 
         assertExecuteOperationOnlyOnce(
                 firstJournalEntryId,
@@ -480,7 +445,7 @@ public class LedgerServiceIntegrationTest extends AbstractIntegrationTest{
     @Test
     void shouldRejectSameIdempotencyKeyWithDifferentRequest() {
 
-        TestAccounts accounts = createTestAccounts();
+        TestAccounts accounts = testAccountFactory.createTestAccounts();
         String idempotencyKey = UUID.randomUUID().toString();
 
         BigDecimal initialCashBalance = accounts.cash().getBalance();
@@ -514,9 +479,9 @@ public class LedgerServiceIntegrationTest extends AbstractIntegrationTest{
                 )
         );
 
-        ledgerService.postJournalEntry(command1,  idempotencyKey);
+        journalEntryService.postJournalEntry(command1,  idempotencyKey);
 
-        assertThatThrownBy(() ->ledgerService.postJournalEntry(command2,  idempotencyKey))
+        assertThatThrownBy(() -> journalEntryService.postJournalEntry(command2,  idempotencyKey))
                 .isInstanceOf(IdempotencyKeyReuseException.class);
 
         BigDecimal actualCashBalance = accountRepository
@@ -536,11 +501,11 @@ public class LedgerServiceIntegrationTest extends AbstractIntegrationTest{
     @Test
     void shouldExecuteOnlyOnceForConcurrentRequests() throws Exception {
 
-        TestAccounts accounts = createTestAccounts();
+        TestAccounts accounts = testAccountFactory.createTestAccounts();
         BigDecimal initialAmount = BigDecimal.valueOf(1000);
         BigDecimal reserveAmount = BigDecimal.valueOf(1000);
 
-        ledgerService.postJournalEntry(new PostJournalEntryCommand(
+        journalEntryService.postJournalEntry(new PostJournalEntryCommand(
                 JournalEntryType.ADJUSTMENT,
                 CURRENCY,
                 "INITIAL_DEPOSIT",
@@ -612,7 +577,7 @@ public class LedgerServiceIntegrationTest extends AbstractIntegrationTest{
         if (!start.await(5, TimeUnit.SECONDS)) throw new IllegalStateException("Concurrent request start timed out");
 
         try {
-            return ledgerService.postJournalEntry(command, idempotencyKey);
+            return journalEntryService.postJournalEntry(command, idempotencyKey).getId();
         } catch (InsufficientAccountBalanceException | IdempotencyKeyReuseException exception) {
             return null;
         }

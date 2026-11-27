@@ -1,4 +1,4 @@
-package tech.inita.ledgerservice.ledger;
+package tech.inita.ledgerservice.journalentry;
 
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
@@ -9,11 +9,10 @@ import tech.inita.ledgerservice.idempotency.IdempotencyResult;
 import tech.inita.ledgerservice.idempotency.IdempotencyScopes;
 import tech.inita.ledgerservice.idempotency.IdempotencyService;
 import tech.inita.ledgerservice.idempotency.RequestHashService;
-import tech.inita.ledgerservice.journalentry.JournalEntry;
-import tech.inita.ledgerservice.journalentry.JournalEntryRepository;
+import tech.inita.ledgerservice.journalentry.command.PostJournalEntryCommand;
+import tech.inita.ledgerservice.journalentry.command.PostingLineCommand;
+import tech.inita.ledgerservice.journalentry.exception.JournalEntryNotFoundException;
 import tech.inita.ledgerservice.journalentry.exception.UnbalancedJournalEntryException;
-import tech.inita.ledgerservice.ledger.command.PostJournalEntryCommand;
-import tech.inita.ledgerservice.ledger.command.PostingLineCommand;
 import tech.inita.ledgerservice.posting.Posting;
 import tech.inita.ledgerservice.posting.PostingRepository;
 import tools.jackson.databind.JsonNode;
@@ -28,7 +27,7 @@ import java.util.stream.Collectors;
 
 @Service
 @RequiredArgsConstructor
-public class LedgerService {
+public class JournalEntryService {
     private final JournalEntryRepository journalEntryRepository;
     private final PostingRepository postingRepository;
     private final AccountLockManager accountLockManager;
@@ -119,14 +118,25 @@ public class LedgerService {
     }
 
     @Transactional
-    public UUID postJournalEntry(
+    public JournalEntry postJournalEntry(
             PostJournalEntryCommand command,
             String idempotencyKey
     ) {
         validatePostingLines(command);
 
         IdempotencyResult idempotencyResult = acquireIdempotency(command, idempotencyKey);
-        if (!idempotencyResult.newlyCreated()) return idempotencyResult.record().getJournalEntryId();
+        if (!idempotencyResult.newlyCreated()) {
+            UUID journalEntryId = idempotencyResult.record().getJournalEntryId();
+
+            if (journalEntryId == null) {
+                throw new IllegalStateException("Idempotency record has no associated journal entry");
+            }
+
+            return journalEntryRepository.findById(journalEntryId)
+                    .orElseThrow(() -> new IllegalStateException(
+                            "Completed idempotency record references a missing journal entry"
+                    ));
+        }
 
         List<Account> accounts = lockAccounts(command);
 
@@ -140,6 +150,11 @@ public class LedgerService {
 
         completeIdempotency(idempotencyResult, journalEntry);
 
-        return journalEntry.getId();
+        return journalEntry;
+    }
+
+    @Transactional(readOnly = true)
+    public JournalEntry getJournalEntry(UUID id) {
+        return journalEntryRepository.findById(id).orElseThrow(() -> new JournalEntryNotFoundException(id));
     }
 }

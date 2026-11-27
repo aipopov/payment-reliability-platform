@@ -3,7 +3,7 @@ package tech.inita.ledgerservice.idempotency;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 import tech.inita.ledgerservice.journalentry.JournalEntryType;
-import tech.inita.ledgerservice.ledger.command.PostJournalEntryCommand;
+import tech.inita.ledgerservice.journalentry.command.PostJournalEntryCommand;
 import tech.inita.ledgerservice.posting.PostingSide;
 import tools.jackson.core.JacksonException;
 import tools.jackson.databind.ObjectMapper;

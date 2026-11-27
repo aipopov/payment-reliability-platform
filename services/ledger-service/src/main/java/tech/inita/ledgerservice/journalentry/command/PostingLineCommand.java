@@ -1,4 +1,4 @@
-package tech.inita.ledgerservice.ledger.command;
+package tech.inita.ledgerservice.journalentry.command;
 
 import tech.inita.ledgerservice.posting.PostingSide;
 
